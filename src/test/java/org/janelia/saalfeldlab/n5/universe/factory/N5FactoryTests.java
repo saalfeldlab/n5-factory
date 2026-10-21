@@ -84,7 +84,7 @@ public class N5FactoryTests {
 
 	private static void assertSuffixGuess(final StorageFormat expected, final String uri) throws URISyntaxException {
 
-		final InferredStorageFormat inferred = InferredStorageFormat.of(new URI(uri));
+		final InferredStorageFormat inferred = N5Location.ofContainer(new URI(uri)).inferredFormat();
 		assertEquals(uri, expected, inferred.format());
 		assertEquals(uri + " source", expected == null
 						? InferredStorageFormat.Source.UNKNOWN
@@ -398,7 +398,7 @@ public class N5FactoryTests {
 		final URI uri = new File("src/test/resources/metadata.zarr").toURI();
 		final KeyValueRoot root = KeyValueRoots.createFileSystem(uri);
 
-		final InferredStorageFormat inferred = InferredStorageFormat.of(uri);
+		final InferredStorageFormat inferred = N5Location.ofContainer(uri).inferredFormat();
 		assertEquals("from the suffix", StorageFormat.ZARR, inferred.format());
 
 		final InferredStorageFormat probed = inferred.resolveFromKeys(root);

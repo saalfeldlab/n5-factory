@@ -40,17 +40,17 @@ public class N5FactoryWithCache extends N5Factory {
 	 * If no cached reader, but a cached writer, return it as an N5Reader.
 	 * Finally, open a new reader if not present in the cache.
 	 *
-	 * @param storage the storage format, or null
+	 * @param requiredFormat the storage format, or null
 	 * @param root root of the container
 	 * @return the N5Reader
 	 */
-	public N5Reader openReaderAllowCachedWriter(final StorageFormat storage, final KeyValueRoot root) {
+	public N5Reader openReaderAllowCachedWriter(final StorageFormat requiredFormat, final KeyValueRoot root) {
 
-		final N5Reader cachedReader = getCachedReaderAllowWriter(storage, root.uri());
+		final N5Reader cachedReader = getCachedReaderAllowWriter(requiredFormat, root.uri());
 		if (cachedReader != null)
 			return cachedReader;
 
-		return openReader(storage, root);
+		return openReader(requiredFormat, root);
 	}
 
 	/**
@@ -67,46 +67,55 @@ public class N5FactoryWithCache extends N5Factory {
 	 */
 	public N5Reader openReaderAllowCachedWriter(final String uri) {
 
-		/* Only an explicit storage-scheme prefix counts here: a guess from the path suffix is
-		 * not what openReaderHelper() would have keyed the entry under. */
-		final InferredStorageFormat inferred = InferredStorageFormat.of(uri);
-		final StorageFormat storage = inferred.isExplicit() ? inferred.format() : null;
-
-		final N5Reader cachedReader = getCachedReaderAllowWriter(storage, inferred.uri());
+		final N5Location location = N5Location.of(uri);
+		final N5Reader cachedReader = getCachedReaderAllowWriter(
+				explicitFormat(location.inferredFormat()),
+				location.containerUri());
 		if (cachedReader != null)
 			return cachedReader;
 
 		return openReader(uri);
 	}
 
-	private N5Reader getCachedReaderAllowWriter(final StorageFormat storage, final URI location) {
+	private N5Reader getCachedReaderAllowWriter(final StorageFormat requiredFormat, final URI location) {
 
 		/* try to get a cached reader */
-		final N5Reader readerFromCache = getReaderFromCache(storage, location);
+		final N5Reader readerFromCache = getReaderFromCache(requiredFormat, location);
 		if (readerFromCache != null)
 			return readerFromCache;
 
 		/* else see if we have a cached writer we can return as an N5Reader */
 		final boolean dontTestWrite = false;
-		return getWriterFromCache(storage, location, dontTestWrite);
+		return getWriterFromCache(requiredFormat, location, dontTestWrite);
+	}
+
+	/**
+	 * The format a cached reader or writer must have: only an explicit format
+	 * counts. A guess from the path suffix may be wrong, and the cache must
+	 * not reject a correct entry because of it.
+	 */
+	private static StorageFormat explicitFormat(final InferredStorageFormat format) {
+		return format.isExplicit() ? format.format() : null;
 	}
 
 	@Override
-	protected N5Reader openReaderHelper(final StorageFormat format, final KeyValueRoot root, final URI uri) {
+	protected N5Reader openReaderHelper(final InferredStorageFormat inferredFormat, final KeyValueRoot root) {
+
+		final StorageFormat requiredFormat = explicitFormat(inferredFormat);
 
 		/* if possible, return cached reader without synchronizing */
-		final N5Reader cached = getReaderFromCache(format, root.uri());
+		final N5Reader cached = getReaderFromCache(requiredFormat, root.uri());
 		if (cached != null)
 			return cached;
 
 		synchronized (this) {
 
 			/* another thread may have opened it while we waited */
-			final N5Reader reopened = getReaderFromCache(format, root.uri());
+			final N5Reader reopened = getReaderFromCache(requiredFormat, root.uri());
 			if (reopened != null)
 				return reopened;
 
-			final N5Reader reader = super.openReaderHelper(format, root, uri);
+			final N5Reader reader = super.openReaderHelper(inferredFormat, root);
 			if (reader != null)
 				readerCache.put(normalizeUri(root.uri()), reader);
 			return reader;
@@ -115,20 +124,20 @@ public class N5FactoryWithCache extends N5Factory {
 
 	/**
 	 * Get the cached reader at {@code location}, evicting it if it no longer matches
-	 * {@code format} or can no longer read.
+	 * {@code requiredFormat} or can no longer read.
 	 *
-	 * @param format the format the reader must have, or {@code null} to accept any
+	 * @param requiredFormat the foramt the reader must have, or {@code null} to accept any
 	 * @param location the container location
 	 * @return the cached reader, or {@code null} if there is no valid one
 	 */
-	protected N5Reader getReaderFromCache(final StorageFormat format, final URI location) {
+	protected N5Reader getReaderFromCache(final StorageFormat requiredFormat, final URI location) {
 
 		final URI uri = normalizeUri(location);
 		final N5Reader reader = readerCache.get(uri);
 		if (reader == null)
 			return null;
 
-		final boolean readerIsValid = n5MatchesFormat(reader, format) && canRead(reader);
+		final boolean readerIsValid = n5MatchesFormat(reader, requiredFormat) && canRead(reader);
 		if (!readerIsValid) {
 			readerCache.remove(uri, reader);
 			return null;
@@ -137,20 +146,21 @@ public class N5FactoryWithCache extends N5Factory {
 	}
 
 	@Override
-	protected N5Writer openWriterHelper(final StorageFormat format, final KeyValueRoot root, final URI uri) {
+	protected N5Writer openWriterHelper(final InferredStorageFormat inferredFormat, final KeyValueRoot root) {
 
+		final StorageFormat requiredFormat = explicitFormat(inferredFormat);
 		final boolean testWrite = true;
-		final N5Writer cached = getWriterFromCache(format, root.uri(), testWrite);
+		final N5Writer cached = getWriterFromCache(requiredFormat, root.uri(), testWrite);
 		if (cached != null)
 			return cached;
 
 		synchronized (this) {
 			/* see if someone opened this while we were waiting. */
-			final N5Writer reopened = getWriterFromCache(format, root.uri(), testWrite);
+			final N5Writer reopened = getWriterFromCache(requiredFormat, root.uri(), testWrite);
 			if (reopened != null)
 				return reopened;
 
-			final N5Writer writer = super.openWriterHelper(format, root, uri);
+			final N5Writer writer = super.openWriterHelper(inferredFormat, root);
 			if (writer != null)
 				writerCache.put(normalizeUri(root.uri()), writer);
 			return writer;
@@ -159,21 +169,21 @@ public class N5FactoryWithCache extends N5Factory {
 
 	/**
 	 * Get the cached writer at {@code location}, evicting it if it no longer matches
-	 * {@code format} or, if {@code testWrite}, can no longer write.
+	 * {@code requiredFormat} or, if {@code testWrite}, can no longer write.
 	 *
-	 * @param format the format the writer must have, or {@code null} to accept any
+	 * @param requiredFormat the format the writer must have, or {@code null} to accept any
 	 * @param location the container location
 	 * @param testWrite whether to check that the writer can still write
 	 * @return the cached writer, or {@code null} if there is no valid one
 	 */
-	protected N5Writer getWriterFromCache(final StorageFormat format, final URI location, final boolean testWrite) {
+	protected N5Writer getWriterFromCache(final StorageFormat requiredFormat, final URI location, final boolean testWrite) {
 
 		final URI uri = normalizeUri(location);
 		final N5Writer writer = writerCache.get(uri);
 		if (writer == null)
 			return null;
 
-		final boolean writerIsValid = n5MatchesFormat(writer, format) && (!testWrite || canWrite(writer));
+		final boolean writerIsValid = n5MatchesFormat(writer, requiredFormat) && (!testWrite || canWrite(writer));
 
 		if (!writerIsValid) {
 			writerCache.remove(uri, writer);
@@ -320,26 +330,27 @@ public class N5FactoryWithCache extends N5Factory {
 	 */
 	public boolean remove(final String uri) {
 
-		return remove(InferredStorageFormat.of(uri).uri());
+		return remove(N5Location.of(uri).containerUri());
 	}
 
 	private static URI normalizeUri(final URI uri) {
+
+		final URI normalized;
 		if (uri.isAbsolute() && !uri.getScheme().equals("file"))
-			return uri.normalize();
-
-		final URI uriFromPath;
-		if (uri.isAbsolute())
-			uriFromPath = Paths.get(uri).normalize().toUri();
+			normalized = uri.normalize();
+		else if (uri.isAbsolute())
+			normalized = Paths.get(uri).normalize().toUri();
 		else
-			uriFromPath = Paths.get(uri.getPath()).normalize().toUri();
+			normalized = Paths.get(uri.getPath()).normalize().toUri();
 
-		/* By Default, Path.toUri() will add a trailing `/` if it is a directory.
-		 * The problem is if it is a directory that doesn't exist yet (e.g. creating a new writer).
-		 * then the first time the URI will have no trailing `/` and the next time it will. This
-		 * causes the cache to consider them different keys.
+		/* By default, Path.toUri() adds a trailing `/` only if it is an existing directory.
+		 * So a container that doesn't exist yet (e.g. creating a new writer) would get a key
+		 * without `/` the first time and one with `/` the next time.
 		 *
-		 * We remove the leading slash in all cases, to avoid this issue.  */
-		final String uriWithoutTrailingSlash = uriFromPath.toString().replaceAll("/$", "");
-		return URI.create(uriWithoutTrailingSlash).normalize();
+		 * We add the trailing slash in all cases, to avoid this issue. (Adding rather than
+		 * removing it matches KeyValueRoot.uri(), which always ends in `/`, and keeps the
+		 * file system root "file:///" a valid URI.) */
+		final String str = normalized.toString();
+		return str.endsWith("/") ? normalized : URI.create(str + "/");
 	}
 }

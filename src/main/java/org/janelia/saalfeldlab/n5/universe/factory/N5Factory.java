@@ -1,15 +1,12 @@
 package org.janelia.saalfeldlab.n5.universe.factory;
 
 import java.net.URI;
-import java.net.URISyntaxException;
-import java.nio.file.Paths;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import org.janelia.saalfeldlab.n5.KeyValueRoot;
 import org.janelia.saalfeldlab.n5.N5Exception;
 import org.janelia.saalfeldlab.n5.N5Exception.N5IOException;
 import org.janelia.saalfeldlab.n5.N5Reader;
-import org.janelia.saalfeldlab.n5.N5URI;
 import org.janelia.saalfeldlab.n5.N5Writer;
 import org.janelia.saalfeldlab.n5.universe.factory.options.FormatOptions;
 import org.janelia.saalfeldlab.n5.universe.factory.options.N5FactoryOptions;
@@ -103,7 +100,7 @@ public class N5Factory {
 	 * @return the N5Reader
 	 */
 	public N5Reader openReader(final String uri) {
-		return openReader((StorageFormat) null, uri);
+		return openReader(null, uri);
 	}
 
 	/**
@@ -115,7 +112,8 @@ public class N5Factory {
 	 * @return the N5Reader
 	 */
 	public N5Reader openReader(final StorageFormat format, final String uri) {
-		return openReader(format, parseUriFromString(uri));
+
+		return openReader(format, N5Location.of(uri));
 	}
 
 	/**
@@ -126,14 +124,19 @@ public class N5Factory {
 	 * @param uri the root location of the store
 	 * @return the N5Reader
 	 */
-	public N5Reader openReader(StorageFormat format, final URI uri) {
+	public N5Reader openReader(final StorageFormat format, final URI uri) {
 
-		final URI rootUri = stripStorageSchemePrefix(uri);
-		final KeyValueRoot root = getKeyValueRoot(rootUri, true);
+		return openReader(format, N5Location.of(uri));
+	}
+
+	private N5Reader openReader(final StorageFormat format, final N5Location location) {
+
+		final KeyValueRoot root = getKeyValueRoot(location.containerUri(), true);
 		if (root == null)
-			throw new N5Exception("Cannot get KeyValueRoot at " + rootUri);
+			throw new N5Exception("Cannot get KeyValueRoot at " + location.containerUri());
 
-		return openReaderHelper(format, root, uri);
+		final InferredStorageFormat formatHint = format != null ? InferredStorageFormat.of(format) : location.inferredFormat();
+		return openReaderHelper(formatHint, root);
 	}
 
 	/**
@@ -147,7 +150,7 @@ public class N5Factory {
 	 * @return the N5Reader
 	 */
 	public N5Reader openReader(final StorageFormat format, final KeyValueRoot root) {
-		return openReaderHelper(format, root, root.uri());
+		return openReaderHelper(InferredStorageFormat.of(format, root.uri()), root);
 	}
 
 
@@ -175,7 +178,8 @@ public class N5Factory {
 	 * @return the N5Writer
 	 */
 	public N5Writer openWriter(final StorageFormat format, final String uri) {
-		return openWriter(format, parseUriFromString(uri));
+
+		return openWriter(format, N5Location.of(uri));
 	}
 
 	/**
@@ -188,12 +192,17 @@ public class N5Factory {
 	 */
 	public N5Writer openWriter(final StorageFormat format, final URI uri) {
 
-		final URI rootUri = stripStorageSchemePrefix(uri);
-		final KeyValueRoot root = getKeyValueRoot(rootUri, false);
-		if (root == null)
-			throw new N5Exception("Cannot get KeyValueRoot at " + rootUri);
+		return openWriter(format, N5Location.of(uri));
+	}
 
-		return openWriterHelper(format, root, uri);
+	private N5Writer openWriter(final StorageFormat format, final N5Location location) {
+
+		final KeyValueRoot root = getKeyValueRoot(location.containerUri(), false);
+		if (root == null)
+			throw new N5Exception("Cannot get KeyValueRoot at " + location.containerUri());
+
+		final InferredStorageFormat formatHint = format != null ? InferredStorageFormat.of(format) : location.inferredFormat();
+		return openWriterHelper(formatHint, root);
 	}
 
 	/**
@@ -208,7 +217,7 @@ public class N5Factory {
 	 */
 	public N5Writer openWriter(final StorageFormat format, final KeyValueRoot root) {
 
-		return openWriterHelper(format, root, root.uri());
+		return openWriterHelper(InferredStorageFormat.of(format, root.uri()), root);
 	}
 
 	/**
@@ -266,76 +275,42 @@ public class N5Factory {
 	// └──────────────────────────────────────────────────────────────────────┘
 
 	/**
-	 * Open an {@link N5Reader} at {@code root} requiring the specified {@link StorageFormat}.
+	 * Open an {@link N5Reader} at {@code root}.
 	 * <p>
-	 * If {@code format==null} the format is inferred from the {@code uri} and, if that is not
-	 * authoritative, by probing {@code root} (for presence of attributes files, etc.)
-	 * <p>
-	 * Why the additional {@code uri} argument?
-	 * {@code uri} is the {@link KeyValueRoot#uri() uri} of {@code root}, but possibly with an
-	 * additional storage-scheme prefix, which is important for format inference.
+	 * If {@code format} is explicit, the container is opened in that format.
+	 * Otherwise it is a guess (or {@link InferredStorageFormat.Source#UNKNOWN
+	 * unknown}), and the format is settled by probing {@code root} (for
+	 * presence of attributes files, etc.).
 	 *
-	 * @param format format of the container, or {@code null} to infer format
+	 * @param format format of the container, explicit or guessed
 	 * @param root root of the container
-	 * @param uri root URI, possibly with an additional storage-scheme prefix
 	 * @return the N5Reader
 	 */
 	// NB: This method is protected so that it can be overridden by
 	// N5FactoryWithCache to inject its readerCache. Every openReader()
 	// overload funnels through here.
-	protected N5Reader openReaderHelper(final StorageFormat format, final KeyValueRoot root, final URI uri) {
+	protected N5Reader openReaderHelper(final InferredStorageFormat format, final KeyValueRoot root) {
 
-		return Containers.openReader(root, format, uri, options.format());
+		return Containers.openReader(root, format, options.format());
 	}
 
 	/**
-	 * Open an {@link N5Writer} at {@code root} requiring the specified {@link StorageFormat}.
+	 * Open an {@link N5Writer} at {@code root}.
 	 * <p>
-	 * If {@code format==null} the format is inferred from the {@code uri} and, if that is not
-	 * authoritative, by probing {@code root} (for presence of attributes files, etc.)
-	 * <p>
-	 * Why the additional {@code uri} argument?
-	 * {@code uri} is the {@link KeyValueRoot#uri() uri} of {@code root}, but possibly with an
-	 * additional storage-scheme prefix, which is important for format inference.
+	 * If {@code format} is explicit, the container is opened in that format.
+	 * Otherwise it is a guess (or {@link InferredStorageFormat.Source#UNKNOWN
+	 * unknown}), and the format is settled by probing {@code root} (for
+	 * presence of attributes files, etc.).
 	 *
-	 * @param format format of the container, or {@code null} to infer format
+	 * @param format format of the container, explicit or guessed
 	 * @param root root of the container
-	 * @param uri root URI, possibly with an additional storage-scheme prefix
 	 * @return the N5Writer
 	 */
 	// NB: This method is protected so that it can be overridden by
 	// N5FactoryWithCache to inject its writerCache. Every openWriter()
 	// overload funnels through here.
-	protected N5Writer openWriterHelper(final StorageFormat format, final KeyValueRoot root, final URI uri) {
+	protected N5Writer openWriterHelper(final InferredStorageFormat format, final KeyValueRoot root) {
 
-		return Containers.openWriter(root, format, uri, options.format());
+		return Containers.openWriter(root, format, options.format());
 	}
-
-	/**
-	 * Strip storage-scheme prefix from {@code uri}, if there is one.
-	 * <p>
-	 * For example:<br/>
-	 * {@code zarr3://s3://my-bucket/path} becomes {@code s3://my-bucket/path}<br/>
-	 * {@code zarr2:https://example.org/data} becomes {@code https://example.org/data}
-	 */
-	private static URI stripStorageSchemePrefix(final URI uri) {
-		return InferredStorageFormat.of(uri.toString()).uri();
-	}
-
-	static URI parseUriFromString(String uri) {
-		try {
-			return URI.create(uri);
-		} catch (final Throwable ignore) {}
-
-		try {
-			return Paths.get(uri).toUri();
-		} catch (final Throwable ignore) {}
-
-		try {
-			return N5URI.encodeAsUri(uri);
-		} catch (final URISyntaxException e) {
-			throw new N5Exception(e);
-		}
-	}
-
 }

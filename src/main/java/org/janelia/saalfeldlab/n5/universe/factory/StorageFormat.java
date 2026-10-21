@@ -53,4 +53,26 @@ public enum StorageFormat {
 
 		return schemePattern;
 	}
+
+	/**
+	 * The format named by a scheme token, e.g. {@link #HDF5} for {@code "h5"}
+	 * or {@code "HDF5"}. The token is matched as a whole and case-insensitively,
+	 * and must not include the {@code ":"} or {@code "//"} that follow it in a
+	 * URI.
+	 *
+	 * @param schemeToken
+	 * 		a scheme token, such as {@code "zarr3"}
+	 *
+	 * @return the format, or {@code null} if {@code schemeToken} names none
+	 */
+	public static StorageFormat fromScheme(final String schemeToken) {
+
+		if (schemeToken == null)
+			return null;
+		for (final StorageFormat format : values()) {
+			if (format.schemePattern.matcher(schemeToken).matches())
+				return format;
+		}
+		return null;
+	}
 }

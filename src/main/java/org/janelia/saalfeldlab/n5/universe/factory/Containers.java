@@ -1,6 +1,5 @@
 package org.janelia.saalfeldlab.n5.universe.factory;
 
-import java.net.URI;
 import org.janelia.saalfeldlab.n5.KeyValueRoot;
 import org.janelia.saalfeldlab.n5.N5Exception;
 import org.janelia.saalfeldlab.n5.N5KeyValueReader;
@@ -21,7 +20,7 @@ import org.janelia.saalfeldlab.n5.zarr.v3.ZarrV3KeyValueWriter;
  * To open a reader or writer, {@link N5Factory} needs to choose a
  * <em>backend</em> and a container <em>format</em>.
  * <p>
- * {@link Containers} handles the <em>foramt</em> axis: Read a N5 container
+ * {@link Containers} handles the <em>format</em> axis: Read a N5 container
  * at a given {@link KeyValueRoot} with the appropriate {@link StorageFormat}.
  * This is a package-private helper class, split out for clarity, and only
  * used by {@link N5Factory}.
@@ -29,9 +28,9 @@ import org.janelia.saalfeldlab.n5.zarr.v3.ZarrV3KeyValueWriter;
  * {@link #openReader} and {@link #openWriter} are the entry points. They both
  * go through the following helpers:
  * <ul>
- * <li>{@link #inferFormat} identifies the format of an existing container,
- *     from an explicit storage-scheme prefix on the URI, else by probing keys,
- *     else from the path suffix.</li>
+ * <li>{@link InferredStorageFormat#resolveFromKeys} settles the format: an
+ *     explicit format is used as is, otherwise the keys of an existing
+ *     container are probed, else the path-suffix guess stands.</li>
  * <li>{@link #buildReader}/{@link #buildWriter} builds for a format that is
  *     decided. ({@link StorageFormat#ZARR} is only half decided and is refined
  *     to V2 or V3 by probing the container.)</li>
@@ -55,65 +54,47 @@ final class Containers {
 	private Containers() {}
 
 	/**
-	 * Open an {@link N5Reader} at {@code root} in the given {@code format}, or,
-	 * if {@code format} is {@code null}, in whichever format the container
-	 * turns out to be in.
-	 * <p>
-	 * Why the additional {@code uri} argument? It is the
-	 * {@link KeyValueRoot#uri() uri} of {@code root}, but possibly with an
-	 * additional storage-scheme prefix, which is what makes format inference
-	 * authoritative when there is one.
+	 * Open an {@link N5Reader} at {@code root} in the given {@code format} if explicit,
+	 * or otherwise in whichever format the container turns out to be in.
 	 *
 	 * @param root root of the container
-	 * @param format format of the container, or {@code null} to infer it
-	 * @param uri root URI, possibly with an additional storage-scheme prefix
+	 * @param format the format (explicit, guessed, or unknown, see {@link InferredStorageFormat#source()})
 	 * @param options the per-format configuration
 	 * @return the N5Reader
 	 * @throws N5Exception if the container could not be opened
 	 */
 	static N5Reader openReader(
 			final KeyValueRoot root,
-			StorageFormat format,
-			final URI uri,
+			final InferredStorageFormat format,
 			final FormatOptions options) {
 
-		if (format == null)
-			format = inferFormat(root, uri);
-
-		return format == null
+		final StorageFormat resolved = resolve(format, root);
+		return resolved == null
 				? openAnyFormatReader(root, options)
-				: buildReader(root, format, options);
+				: buildReader(root, resolved, options);
 	}
 
 	/**
-	 * Open an {@link N5Writer} at {@code root} in the given {@code format}, or,
-	 * if {@code format} is {@code null}, in whichever format the container
-	 * turns out to be in — creating it if it is not there at all.
-	 * <p>
-	 * Why the additional {@code uri} argument? It is the
-	 * {@link KeyValueRoot#uri() uri} of {@code root}, but possibly with an
-	 * additional storage-scheme prefix, which is what makes format inference
-	 * authoritative when there is one.
+	 * Open an {@link N5Writer} at {@code root} in the given {@code format} if explicit.
+	 * If the {@code format} is not explicit, use the format the container turns out to be in.
+	 * If no container exists at {@code root}, a new container is created, either in the given {@code format} if explicit,
+	 * or by trying all formats starting with {@link FormatOptions#preferredStorageFormat(StorageFormat)}.
 	 *
 	 * @param root root of the container
-	 * @param format format of the container, or {@code null} to infer it
-	 * @param uri root URI, possibly with an additional storage-scheme prefix
+	 * @param format the format (explicit, guessed, or unknown, see {@link InferredStorageFormat#source()})
 	 * @param options the per-format configuration
 	 * @return the N5Writer
 	 * @throws N5Exception if the container could not be opened
 	 */
 	static N5Writer openWriter(
 			final KeyValueRoot root,
-			StorageFormat format,
-			final URI uri,
+			final InferredStorageFormat format,
 			final FormatOptions options) {
 
-		if (format == null)
-			format = inferFormat(root, uri);
-
-		return format == null
+		final StorageFormat resolved = resolve(format, root);
+		return resolved == null
 				? openAnyFormatWriter(root, options)
-				: buildWriter(root, format, options);
+				: buildWriter(root, resolved, options);
 	}
 
 
@@ -121,18 +102,9 @@ final class Containers {
 	// │ infer format                                                         │
 	// └──────────────────────────────────────────────────────────────────────┘
 
-	/**
-	 * Infer the {@link StorageFormat} of the container at {@code root}: from an
-	 * explicit storage-scheme prefix on {@code uri}, else by probing the keys at
-	 * {@code root}, else from the path suffix of {@code uri}.
-	 *
-	 * @param root root of the container
-	 * @param uri root URI, possibly with an additional storage-scheme prefix
-	 * @return the format, or {@code null} if nothing identified one
-	 */
-	private static StorageFormat inferFormat(final KeyValueRoot root, final URI uri) {
+	private static StorageFormat resolve(final InferredStorageFormat format, final KeyValueRoot root) {
 
-		final InferredStorageFormat inferred = InferredStorageFormat.of(uri);
+		final InferredStorageFormat inferred = format != null ? format : InferredStorageFormat.unknown();
 		return inferred.isExplicit()
 				? inferred.format()
 				: inferred.resolveFromKeys(root).format();
@@ -316,10 +288,8 @@ final class Containers {
 	 */
 	private static StorageFormat inferZarrVersion(final KeyValueRoot root) {
 
+		// NB: Not explicit, so resolveFromKeys() always probes.
 		final InferredStorageFormat inferred = InferredStorageFormat.of(root.uri());
-
-		// NB: inferred.resolveFromKeys() always probes:
-		// root.uri() is a backend URI and has no storage scheme prefix.
 		final StorageFormat probed = inferred.resolveFromKeys(root).format();
 
 		// NB: need to check whether probed is ZARR2 or ZARR3
