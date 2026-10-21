@@ -2,6 +2,7 @@ package org.janelia.saalfeldlab.n5.universe.factory;
 
 import org.janelia.saalfeldlab.n5.HttpKeyValueRoot;
 import org.janelia.saalfeldlab.n5.KeyValueRoot;
+import org.janelia.saalfeldlab.n5.N5Exception;
 import org.janelia.saalfeldlab.n5.N5Exception.N5IOException;
 import org.janelia.saalfeldlab.n5.N5Path.N5DirectoryPath;
 import org.janelia.saalfeldlab.n5.universe.factory.options.BackendOptions;
@@ -14,6 +15,7 @@ import java.util.Random;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -48,7 +50,7 @@ public class KeyValueRootsBackendTests {
 
 		s3Uri = URI.create("s3://should-not-exist-bucket-" + random.nextLong());
 		gcsUri = URI.create("gs://should-not-exist-bucket-" + random.nextLong());
-		fsUri = URI.create("file://should-not-exist-path-" + random.nextLong());
+		fsUri = URI.create("file:///should-not-exist-path-" + random.nextLong());
 		httpUri = URI.create("https://localhost");
 	}
 
@@ -92,14 +94,23 @@ public class KeyValueRootsBackendTests {
 	@Test
 	public void testFSKeyValueRootCreation() {
 
-		// root of file system should always exist
+		// creating a root does not create the directory
 		final KeyValueRoot root = KeyValueRoots.createFileSystem(fsUri);
-		assertTrue(root.exists(ROOT));
+		assertNotNull(root);
+		assertFalse(root.exists(ROOT));
 
 		// NB: There is no readOnly variant. The old KeyValueAccessBackend.FILE took the flag
 		// and ignored it — a FileSystemKeyValueAccess is the same object either way — so
 		// createFileSystem does not ask for it.
-		assertTrue(KeyValueRoots.create(fsUri, true, options()).exists(ROOT));
+		assertFalse(KeyValueRoots.create(fsUri, true, options()).exists(ROOT));
+
+		// only an absolute "file:" URI names a local file
+		assertThrows(N5Exception.class, () -> KeyValueRoots.createFileSystem(URI.create("relative/path")));
+		assertThrows(N5Exception.class, () -> KeyValueRoots.createFileSystem(URI.create("file:///path?query")));
+		assertThrows(N5Exception.class, () -> KeyValueRoots.createFileSystem(URI.create("s3://bucket/path")));
+
+		// a URI without scheme is not dispatched (turning a path into a URI is N5Location's job)
+		assertNull(KeyValueRoots.create(URI.create("relative/path"), true, options()));
 	}
 
 	@Test

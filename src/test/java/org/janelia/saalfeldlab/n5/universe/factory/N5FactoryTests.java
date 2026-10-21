@@ -392,10 +392,10 @@ public class N5FactoryTests {
 	}
 
 	@Test
-	public void testZarr2VsZarr3Disambiguation() throws URISyntaxException {
+	public void testZarr2VsZarr3Disambiguation() {
 
 		/* The suffix only says ZARR; only probing the keys can tell v2 from v3. */
-		final URI uri = new URI("src/test/resources/metadata.zarr");
+		final URI uri = new File("src/test/resources/metadata.zarr").toURI();
 		final KeyValueRoot root = KeyValueRoots.createFileSystem(uri);
 
 		final InferredStorageFormat inferred = InferredStorageFormat.of(uri);

@@ -82,7 +82,7 @@ public class N5Factory {
 	 * resolved from the URI scheme (and potentially probing the content
 	 * if that is inconclusive).
 	 *
-	 * @param uri to create a {@link KeyValueRoot} from
+	 * @param uri absolute URI to create a {@link KeyValueRoot} from
 	 * @param readOnly whether the root will only be read from
 	 * @return the {@link KeyValueRoot}, or null if none are valid
 	 */

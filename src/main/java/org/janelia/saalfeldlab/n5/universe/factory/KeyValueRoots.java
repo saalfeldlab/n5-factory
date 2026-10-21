@@ -23,6 +23,8 @@ import java.io.PrintStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
+import java.nio.file.FileSystemNotFoundException;
+import java.nio.file.Paths;
 import java.util.HashSet;
 import java.util.regex.Pattern;
 
@@ -62,7 +64,7 @@ public final class KeyValueRoots {
 	 * {@link KeyValueRoot}. If no appropriate {@link KeyValueRoot} is found,
 	 * may be null.
 	 *
-	 * @param uri to create a {@link KeyValueRoot} from
+	 * @param uri absolute URI to create a {@link KeyValueRoot} from
 	 * @param readOnly whether the root will only be read from
 	 * @param options the configuration to reach the backend with
 	 * @return the {@link KeyValueRoot}, or null if none are valid
@@ -74,8 +76,12 @@ public final class KeyValueRoots {
 
 		final String scheme = uri.getScheme();
 
-		// No scheme at all is a bare path, i.e. the local file system.
-		if (scheme == null || FILE_SCHEME.asPredicate().test(scheme))
+		// NB: A URI without scheme (a bare path) is not dispatched. Turning
+		// user input into an absolute URI is N5Location's job.
+		if (scheme == null)
+			return null;
+
+		if (FILE_SCHEME.asPredicate().test(scheme))
 			return createFileSystem(uri);
 
 		if (GS_SCHEME.asPredicate().test(scheme))
@@ -93,12 +99,21 @@ public final class KeyValueRoots {
 	/**
 	 * Create a {@link KeyValueRoot} on the local file system.
 	 *
-	 * @param uri a {@code file:} URI, or a bare path
+	 * @param uri an absolute {@code file:} URI
 	 * @return the root
+	 * @throws N5Exception if {@code uri} does not name a local file
 	 */
 	public static KeyValueRoot createFileSystem(final URI uri) {
 
-		return new FileSystemKeyValueRoot(uri.getPath());
+		// NB: Paths.get(URI) rejects anything that does not name a local file: no scheme,
+		// a scheme other than "file", opaque, query, fragment, and on Unix any authority.
+		// On Windows it maps "file:///C:/x" to the drive and "file://server/share/x" to
+		// the UNC path, which uri.getPath() would get wrong.
+		try {
+			return new FileSystemKeyValueRoot(Paths.get(uri).toUri().toString());
+		} catch (final IllegalArgumentException | FileSystemNotFoundException e) {
+			throw new N5Exception("Not a local file URI: \"" + uri + "\"", e);
+		}
 	}
 
 	/**
